@@ -1,0 +1,14 @@
+venv_*
+*.m4a
+build
+.vscode
+.env
+*.wav
+.DS_Store
+target/
+trint-upload.yml
+bucket-config.yml
+tests
+shift-upload.yml
+.cargo
+rustup
