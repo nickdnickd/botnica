@@ -9,9 +9,7 @@ use rusoto_s3::{
     CompletedPart, CreateMultipartUploadRequest, PutObjectRequest, S3Client, UploadPartRequest, S3,
 };
 use slog::{debug, error, info, warn, Logger};
-use sloggers::terminal::{Destination, TerminalLoggerBuilder};
-use sloggers::types::{Severity, TimeZone};
-use sloggers::Build;
+
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -24,79 +22,89 @@ use std::str::FromStr;
 // TODO write more throttling tests.
 // One for a file that is uploading too quickly
 // one for a file that is uploading too slowly and taking up memory
-#[tokio::test]
-async fn test_throttling() {
-    // Resource counter
-    let completed_part_counter = Arc::new(Mutex::new(0i64));
-    let async_completed_parts = Arc::clone(&completed_part_counter);
 
-    // made up parts queued
-    let parts_queued = 2i64;
-    let part_size_bytes = 10i64;
-    let memory_limit_bytes = 20i64;
+#[cfg(test)]
+mod test {
 
-    let mut builder = TerminalLoggerBuilder::new();
-    builder.level(Severity::Debug);
-    builder.destination(Destination::Stdout);
-    builder.timezone(TimeZone::Utc);
+    use super::*;
+    use sloggers::terminal::{Destination, TerminalLoggerBuilder};
+    use sloggers::types::{Severity, TimeZone};
+    use sloggers::Build;
 
-    let logger = builder.build().unwrap();
-    let logger_clone = logger.clone();
+    #[tokio::test]
+    async fn test_throttling() {
+        // Resource counter
+        let completed_part_counter = Arc::new(Mutex::new(0i64));
+        let async_completed_parts = Arc::clone(&completed_part_counter);
 
-    // Simulate the upload for a single part
-    info!(logger, "About to spawn async upload");
-    let jhandle = tokio::spawn(async move {
-        info!(logger_clone.to_owned(), "starting upload");
-        tokio::time::delay_for(Duration::new(0, 500000000)).await;
-        let mut data = async_completed_parts.lock().unwrap();
-        *data += 1i64;
-        info!(logger_clone.to_owned(), "upload complete");
-    });
+        // made up parts queued
+        let parts_queued = 2i64;
+        let part_size_bytes = 10i64;
+        let memory_limit_bytes = 20i64;
 
-    info!(logger, "throttling function");
-    let result_after = throttle(
-        parts_queued,
-        part_size_bytes,
-        Arc::clone(&completed_part_counter),
-        memory_limit_bytes,
-        logger.to_owned(),
-    )
-    .await
-    .unwrap();
+        let mut builder = TerminalLoggerBuilder::new();
+        builder.level(Severity::Debug);
+        builder.destination(Destination::Stdout);
+        builder.timezone(TimeZone::Utc);
 
-    info!(logger, "throttling complete");
+        let logger = builder.build().unwrap();
+        let logger_clone = logger.clone();
 
-    let task_result = tokio::join!(jhandle);
-    info!(logger, "delay task result: {:?}", task_result);
+        // Simulate the upload for a single part
+        info!(logger, "About to spawn async upload");
+        let jhandle = tokio::spawn(async move {
+            info!(logger_clone.to_owned(), "starting upload");
+            tokio::time::delay_for(Duration::new(0, 500000000)).await;
+            let mut data = async_completed_parts.lock().unwrap();
+            *data += 1i64;
+            info!(logger_clone.to_owned(), "upload complete");
+        });
 
-    assert!(result_after);
-}
+        info!(logger, "throttling function");
+        let result_after = throttle(
+            parts_queued,
+            part_size_bytes,
+            Arc::clone(&completed_part_counter),
+            memory_limit_bytes,
+            logger.to_owned(),
+        )
+        .await
+        .unwrap();
 
-#[tokio::test]
-async fn test_upload_speed() {
-    let uploaded_bytes = 1024f64 * 1024f64; // 1 MB
-    let duration_nano = 1_000_000_000f64; // 1s
-    assert_eq!(calculate_upload_speed(uploaded_bytes, duration_nano), 8f64);
+        info!(logger, "throttling complete");
 
-    // Ensure that durations less than zero do not cause divide by zero errors
-    let short_duration: f64 = 1_000f64; // 1ms
-    assert_eq!(
-        calculate_upload_speed(uploaded_bytes, short_duration),
-        8_000_000f64
-    );
-}
+        let task_result = tokio::join!(jhandle);
+        info!(logger, "delay task result: {:?}", task_result);
 
-#[tokio::test]
-async fn test_memory_held() {
-    let part_size = 20 * 1024 * 1024; // 20 MB
-    let parts_queued = 5;
-    let parts_completed = 1;
+        assert!(result_after);
+    }
 
-    // We are holding on to 80 MB in memory
-    assert_eq!(
-        calculate_memory_held_bytes(parts_queued, part_size, parts_completed),
-        80 * 1024 * 1024
-    );
+    #[tokio::test]
+    async fn test_upload_speed() {
+        let uploaded_bytes = 1024f64 * 1024f64; // 1 MB
+        let duration_nano = 1_000_000_000f64; // 1s
+        assert_eq!(calculate_upload_speed(uploaded_bytes, duration_nano), 8f64);
+
+        // Ensure that durations less than zero do not cause divide by zero errors
+        let short_duration: f64 = 1_000f64; // 1ms
+        assert_eq!(
+            calculate_upload_speed(uploaded_bytes, short_duration),
+            8_000_000f64
+        );
+    }
+
+    #[tokio::test]
+    async fn test_memory_held() {
+        let part_size = 20 * 1024 * 1024; // 20 MB
+        let parts_queued = 5;
+        let parts_completed = 1;
+
+        // We are holding on to 80 MB in memory
+        assert_eq!(
+            calculate_memory_held_bytes(parts_queued, part_size, parts_completed),
+            80 * 1024 * 1024
+        );
+    }
 }
 
 pub fn calculate_upload_speed(bytes_uploaded: f64, duration_ns: f64) -> f64 {
